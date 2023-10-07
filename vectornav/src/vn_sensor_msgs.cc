@@ -21,7 +21,8 @@
 #include "sensor_msgs/msg/nav_sat_fix.hpp"
 #include "sensor_msgs/msg/temperature.hpp"
 #include "sensor_msgs/msg/time_reference.hpp"
-#include "tf2_geometry_msgs/tf2_geometry_msgs.hpp"
+#include "tf2_geometry_msgs/tf2_geometry_msgs.h"
+#include "tf2/LinearMath/Quaternion.h"
 #include "vectornav_msgs/msg/attitude_group.hpp"
 #include "vectornav_msgs/msg/common_group.hpp"
 #include "vectornav_msgs/msg/gps_group.hpp"
@@ -44,10 +45,8 @@ public:
     // Parameters
     declare_parameter<bool>("use_enu", true);
     declare_parameter<std::vector<double>>("orientation_covariance", orientation_covariance_);
-    declare_parameter<std::vector<double>>(
-      "angular_velocity_covariance", angular_velocity_covariance_);
-    declare_parameter<std::vector<double>>(
-      "linear_acceleration_covariance", linear_acceleration_covariance_);
+    declare_parameter<std::vector<double>>("angular_velocity_covariance", angular_velocity_covariance_);
+    declare_parameter<std::vector<double>>("linear_acceleration_covariance", linear_acceleration_covariance_);
     declare_parameter<std::vector<double>>("magnetic_covariance", magnetic_field_covariance_);
 
     //
@@ -114,7 +113,7 @@ public:
   }
 
 private:
-  void convert_to_enu(const vectornav_msgs::msg::CommonGroup::SharedPtr msg_in, sensor_msgs::msg::Imu &msg_out, const bool &use_compensated_measurements=true) const
+  void convert_to_enu(const vectornav_msgs::msg::CommonGroup::SharedPtr msg_in, sensor_msgs::msg::Imu &msg_out, const bool &use_compensated_measurements=false) const
   {
     // NED to ENU conversion
     // swap x and y and negate z
@@ -126,6 +125,7 @@ private:
       msg_out.linear_acceleration.x = msg_in->accel.y;
       msg_out.linear_acceleration.y = msg_in->accel.x;
       msg_out.linear_acceleration.z = -msg_in->accel.z;
+      
     } else {
       msg_out.angular_velocity.x = msg_in->imu_rate.y;
       msg_out.angular_velocity.y = msg_in->imu_rate.x;
@@ -135,8 +135,8 @@ private:
       msg_out.linear_acceleration.y = msg_in->imu_accel.x;
       msg_out.linear_acceleration.z = -msg_in->imu_accel.z;
     }
-
-    msg_out.orientation = msg_in->quaternion;
+    // RCLCPP_INFO(get_logger(),"ENU");
+    msg_out.orientation = msg_in->quaternion;    
     msg_out.orientation.z = -msg_in->quaternion.z;
   }
 
@@ -203,9 +203,8 @@ private:
     {
       sensor_msgs::msg::Imu msg;
       msg.header = msg_in->header;
-      
       if(use_enu) {
-        convert_to_enu(msg_in, msg);
+        convert_to_enu(msg_in, msg, true);
       } else {
         msg.angular_velocity = msg_in->angularrate;
         msg.linear_acceleration = msg_in->accel;
@@ -219,8 +218,7 @@ private:
 
       fill_covariance_from_param("orientation_covariance", msg.orientation_covariance);
       fill_covariance_from_param("angular_velocity_covariance", msg.angular_velocity_covariance);
-      fill_covariance_from_param(
-        "linear_acceleration_covariance", msg.linear_acceleration_covariance);
+      fill_covariance_from_param("linear_acceleration_covariance", msg.linear_acceleration_covariance);
 
       pub_imu_->publish(msg);
     }
@@ -235,12 +233,12 @@ private:
       } else {
         msg.angular_velocity = msg_in->imu_rate;
         msg.linear_acceleration = msg_in->imu_accel;
+        // RCLCPP_INFO(get_logger(),"NED");
+                // Quaternion ENU -> NED
       }
 
       fill_covariance_from_param("angular_velocity_covariance", msg.angular_velocity_covariance);
-      fill_covariance_from_param(
-        "linear_acceleration_covariance", msg.linear_acceleration_covariance);
-
+      fill_covariance_from_param("linear_acceleration_covariance", msg.linear_acceleration_covariance);
       pub_imu_uncompensated_->publish(msg);
     }
 

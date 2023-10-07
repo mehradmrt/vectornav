@@ -56,8 +56,8 @@ public:
     // TODO(Dereck): Add constraints to parameters
 
     // Device Port
-    auto port = declare_parameter<std::string>("port", "/dev/ttyUSB0");
-
+    auto port = declare_parameter<std::string>("port", "/dev/imu");
+ 
     // Baud Rate
     // 5.2.6
     // 9600, 19200 38400 57600 115200
@@ -157,7 +157,7 @@ public:
     /// GPS Compass Baseline (8.2.3)
 
     // Message Header
-    declare_parameter<std::string>("frame_id", "vectornav");
+    declare_parameter<std::string>("frame_id", "imu_link");
 
     // Composite Data Publisher
     pub_common_ = this->create_publisher<vectornav_msgs::msg::CommonGroup>("vectornav/raw/common", 10);
