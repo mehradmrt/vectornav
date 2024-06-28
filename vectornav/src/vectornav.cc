@@ -21,6 +21,7 @@
 #endif
 
 // ROS2
+#include "geometry_msgs/msg/twist.hpp"
 #include "rclcpp/rclcpp.hpp"
 #include "rclcpp_action/rclcpp_action.hpp"
 #include "vectornav_msgs/msg/attitude_group.hpp"
@@ -35,6 +36,7 @@
 #include "vn/compositedata.h"
 #include "vn/sensors.h"
 #include "vn/util.h"
+#include "vn/vector.h"
 
 using namespace std::chrono_literals;
 using namespace std::placeholders;
@@ -167,6 +169,9 @@ public:
     pub_attitude_ = this->create_publisher<vectornav_msgs::msg::AttitudeGroup>("vectornav/raw/attitude", 10);
     pub_ins_ = this->create_publisher<vectornav_msgs::msg::InsGroup>("vectornav/raw/ins", 10);
     pub_gps2_ = this->create_publisher<vectornav_msgs::msg::GpsGroup>("vectornav/raw/gps2", 10);
+
+    sub_vel_aiding_ = this->create_subscription<geometry_msgs::msg::Twist>(
+      "vectornav/velocity_aiding", 1, std::bind(&Vectornav::vel_aiding_cb, this, _1));
 
     // magnetic cal action
     server_mag_cal_ = rclcpp_action::create_server<MagCal>(
@@ -484,6 +489,21 @@ private:
   }
 
   /**
+   * Callback to take twist message and pass it to VN as velocity aiding 
+   *
+   * \param msg Shared pointer to ROS2 geometry_msgs/Twist message containing velocity information
+   */
+  void vel_aiding_cb(const geometry_msgs::msg::Twist::SharedPtr msg)
+  {
+    // Take a ROS Twist message, and use it to send a velocity aiding message to the VectorNav
+    const auto waitForReply = false;
+    const vn::math::vec3f velocity{
+      static_cast<float>(msg->linear.x), static_cast<float>(msg->linear.y),
+      static_cast<float>(msg->linear.z)};
+    vs_->writeVelocityCompensationMeasurement(velocity, waitForReply);
+  }
+
+  /**
    * Connect to a sensor
    *
    * \param port serial port path, eg /dev/ttyUSB0
@@ -745,30 +765,31 @@ private:
 
     // Parse data into CompositeData container
     vn::sensors::CompositeData cd = cd.parse(asyncPacket);
+    auto timestamp = node->getTimeStamp(cd);
 
     // Groups
     auto i = 0;
 
     if (asyncPacket.groups() & vn::protocol::uart::BinaryGroup::BINARYGROUP_COMMON)
-      parseCommonGroup(node, cd, asyncPacket.groupField(i++));
+      parseCommonGroup(node, cd, asyncPacket.groupField(i++), timestamp);
 
     if (asyncPacket.groups() & vn::protocol::uart::BinaryGroup::BINARYGROUP_TIME)
-      parseTimeGroup(node, cd, asyncPacket.groupField(i++));
+      parseTimeGroup(node, cd, asyncPacket.groupField(i++), timestamp);
 
     if (asyncPacket.groups() & vn::protocol::uart::BinaryGroup::BINARYGROUP_IMU)
-      parseImuGroup(node, cd, asyncPacket.groupField(i++));
+      parseImuGroup(node, cd, asyncPacket.groupField(i++), timestamp);
 
     if (asyncPacket.groups() & vn::protocol::uart::BinaryGroup::BINARYGROUP_GPS)
-      parseGpsGroup(node, cd, asyncPacket.groupField(i++));
+      parseGpsGroup(node, cd, asyncPacket.groupField(i++), timestamp);
 
     if (asyncPacket.groups() & vn::protocol::uart::BinaryGroup::BINARYGROUP_ATTITUDE)
-      parseAttitudeGroup(node, cd, asyncPacket.groupField(i++));
+      parseAttitudeGroup(node, cd, asyncPacket.groupField(i++), timestamp);
 
     if (asyncPacket.groups() & vn::protocol::uart::BinaryGroup::BINARYGROUP_INS)
-      parseInsGroup(node, cd, asyncPacket.groupField(i++));
+      parseInsGroup(node, cd, asyncPacket.groupField(i++), timestamp);
 
     if (asyncPacket.groups() & vn::protocol::uart::BinaryGroup::BINARYGROUP_GPS2)
-      parseGps2Group(node, cd, asyncPacket.groupField(i++));
+      parseGps2Group(node, cd, asyncPacket.groupField(i++), timestamp);
   }
 
   /** Copy Common Group fields in binary packet to a CompositeData message
@@ -777,13 +798,13 @@ private:
    * \param msg Vectornav CompositeData ROS Message
    */
   static void parseCommonGroup(
-    Vectornav * node, vn::sensors::CompositeData & compositeData, uint16_t groupFields)
+    Vectornav * node, vn::sensors::CompositeData & compositeData, uint16_t groupFields, const rclcpp::Time & timestamp)
   {
     // Message to Send
     auto msg = vectornav_msgs::msg::CommonGroup();
 
     // Header
-    msg.header.stamp = node->getTimeStamp(compositeData);
+    msg.header.stamp = timestamp;
     msg.header.frame_id = node->get_parameter("frame_id").as_string();
 
     // Group Fields
@@ -879,13 +900,13 @@ private:
    * \param msg Vectornav CompositeData ROS Message
    */
   static void parseTimeGroup(
-    Vectornav * node, vn::sensors::CompositeData & compositeData, uint16_t groupFields)
+    Vectornav * node, vn::sensors::CompositeData & compositeData, uint16_t groupFields, const rclcpp::Time & timestamp)
   {
     // Message to Send
     auto msg = vectornav_msgs::msg::TimeGroup();
 
     // Header
-    msg.header.stamp = node->getTimeStamp(compositeData);
+    msg.header.stamp = timestamp;
     msg.header.frame_id = node->get_parameter("frame_id").as_string();
 
     // Group Fields
@@ -941,12 +962,12 @@ private:
    * \param msg Vectornav CompositeData ROS Message
    */
   static void parseImuGroup(
-    Vectornav * node, vn::sensors::CompositeData & compositeData, uint16_t groupFields)
+    Vectornav * node, vn::sensors::CompositeData & compositeData, uint16_t groupFields, const rclcpp::Time & timestamp)
   {
     // Message to Send
     auto msg = vectornav_msgs::msg::ImuGroup();
     // Header
-    msg.header.stamp = node->getTimeStamp(compositeData);
+    msg.header.stamp = timestamp;
     msg.header.frame_id = node->get_parameter("frame_id").as_string();
 
     // Group Fields
@@ -1012,13 +1033,13 @@ private:
    * \param msg Vectornav CompositeData ROS Message
    */
   static void parseGpsGroup(
-    Vectornav * node, vn::sensors::CompositeData & compositeData, uint16_t groupFields)
+    Vectornav * node, vn::sensors::CompositeData & compositeData, uint16_t groupFields, const rclcpp::Time & timestamp)
   {
     // Message to Send
     auto msg = vectornav_msgs::msg::GpsGroup();
 
     // Header
-    msg.header.stamp = node->getTimeStamp(compositeData);
+    msg.header.stamp = timestamp;
     msg.header.frame_id = node->get_parameter("frame_id").as_string();
 
     // Group Fields
@@ -1032,11 +1053,10 @@ private:
       msg.tow = compositeData.gpsTow();
     }
 
-    // TODO(Dereck): VNCXX is missing the read function for this field
-    // if(compositeData.hasGpsWeek())
-    // {
-    //   msg.week = compositeData.gpsWeek();
-    // }
+    if(compositeData.hasWeek())
+    {
+      msg.week = compositeData.week();
+    }
 
     if (compositeData.hasNumSats()) {
       msg.numsats = compositeData.numSats();
@@ -1050,11 +1070,10 @@ private:
       msg.poslla = toMsg(compositeData.positionGpsLla());
     }
 
-    // TODO(Dereck): VNCXX is missing the read function for this field
-    // if(compositeData.hasPositionGpsEcef())
-    // {
-    //   msg.posecef = toMsg(compositeData.positionGpsEcef());
-    // }
+    if(compositeData.hasPositionGpsEcef())
+    {
+      msg.posecef = toMsg(compositeData.positionGpsEcef());
+    }
 
     if (compositeData.hasVelocityGpsNed()) {
       msg.velned = toMsg(compositeData.velocityGpsNed());
@@ -1095,13 +1114,13 @@ private:
    * \param msg Vectornav CompositeData ROS Message
    */
   static void parseAttitudeGroup(
-    Vectornav * node, vn::sensors::CompositeData & compositeData, uint16_t groupFields)
+    Vectornav * node, vn::sensors::CompositeData & compositeData, uint16_t groupFields, const rclcpp::Time & timestamp)
   {
     // Message to Send
     auto msg = vectornav_msgs::msg::AttitudeGroup();
 
     // Header
-    msg.header.stamp = node->getTimeStamp(compositeData);
+    msg.header.stamp = timestamp;
     msg.header.frame_id = node->get_parameter("frame_id").as_string();
 
     // Group Fields
@@ -1153,13 +1172,13 @@ private:
    * \param msg Vectornav CompositeData ROS Message
    */
   static void parseInsGroup(
-    Vectornav * node, vn::sensors::CompositeData & compositeData, uint16_t groupFields)
+    Vectornav * node, vn::sensors::CompositeData & compositeData, uint16_t groupFields, const rclcpp::Time & timestamp)
   {
     // Message to Send
     auto msg = vectornav_msgs::msg::InsGroup();
 
     // Header
-    msg.header.stamp = node->getTimeStamp(compositeData);
+    msg.header.stamp = timestamp;
     msg.header.frame_id = node->get_parameter("frame_id").as_string();
 
     // Group Fields
@@ -1225,13 +1244,13 @@ private:
    * TODO(Dereck): VNCXX is missing some read functions
    */
   static void parseGps2Group(
-    Vectornav * node, vn::sensors::CompositeData & compositeData, uint16_t groupFields)
+    Vectornav * node, vn::sensors::CompositeData & compositeData, uint16_t groupFields, const rclcpp::Time & timestamp)
   {
     // Message to Send
     auto msg = vectornav_msgs::msg::GpsGroup();
 
     // Header
-    msg.header.stamp = node->getTimeStamp(compositeData);
+    msg.header.stamp = timestamp;
     msg.header.frame_id = node->get_parameter("frame_id").as_string();
 
     // Group Fields
@@ -1418,11 +1437,10 @@ private:
     lhs.gps_fix = rhs & vn::protocol::uart::InsStatus::INSSTATUS_GPS_FIX;
     lhs.time_error = rhs & vn::protocol::uart::InsStatus::INSSTATUS_TIME_ERROR;
     lhs.imu_error = rhs & vn::protocol::uart::InsStatus::INSSTATUS_IMU_ERROR;
-    lhs.time_error = rhs & vn::protocol::uart::InsStatus::INSSTATUS_GPS_FIX;
     lhs.mag_pres_error = rhs & vn::protocol::uart::InsStatus::INSSTATUS_MAG_PRES_ERROR;
     lhs.gps_error = rhs & vn::protocol::uart::InsStatus::INSSTATUS_GPS_ERROR;
-    lhs.gps_heading_ins = rhs & 0x0080;
-    lhs.gps_compass = rhs & 0x0100;
+    lhs.gps_heading_ins = rhs & 0x0100;
+    lhs.gps_compass = rhs & 0x0200;
     return lhs;
   }
 
@@ -1456,6 +1474,9 @@ private:
   rclcpp::Publisher<vectornav_msgs::msg::AttitudeGroup>::SharedPtr pub_attitude_;
   rclcpp::Publisher<vectornav_msgs::msg::InsGroup>::SharedPtr pub_ins_;
   rclcpp::Publisher<vectornav_msgs::msg::GpsGroup>::SharedPtr pub_gps2_;
+
+  // Subscriptions
+  rclcpp::Subscription<geometry_msgs::msg::Twist>::SharedPtr sub_vel_aiding_;
 
   /// Action servers for calibration
   rclcpp_action::Server<vectornav_msgs::action::MagCal>::SharedPtr server_mag_cal_;
